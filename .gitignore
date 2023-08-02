@@ -1,0 +1,8 @@
+POPI.f90~
+POPI_new.f90~
+ReadGuess.f90~
+compileLineTmp
+pi_rpo_guess.mod
+popi.mod
+ReadGuess.o
+a.out
