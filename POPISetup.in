@@ -1,0 +1,4 @@
+&POPISETUP
+ RPOFILE   = 'RPOSolve.in'
+ POPIFILE  = 'POPI.in'
+/

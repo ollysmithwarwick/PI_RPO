@@ -140,6 +140,8 @@
            POPIRunOut%initGuess(1) = S
         end if
      end if
+
+!     write(*,*) 'file2popirun : ', POPIRunOut%initGuess
    end subroutine file2POPIRun
 
    subroutine POPIRun2file(POPIRunOut, fileName, initInfoFileIn)
@@ -203,12 +205,14 @@
 
      real(dp), dimension(:), allocatable :: initGuess
      real(dp), dimension(1:,1:) :: states_
+     real(dp), dimension(:,:), allocatable :: guessesTmp_
      real(dp), dimension(:,:), allocatable :: guesses_
 !     real(dp), dimension(:,:), allocatable, intent(out), optional :: Jac_
      integer, optional :: infoOut
      logical :: jacOut = .false.
      integer :: info, size
-     logical :: saveGuess = .false.
+     logical :: saveGuessFlag = .true.
+     integer :: nits = 0
      double complex, dimension(:), allocatable :: final_f
      external :: getrhs, saveorbit
 
@@ -227,7 +231,7 @@
      fixedS      = POPIParams%fixedS
      write(*,*) 'POPI_main: Test'
 
-     allocate(guesses_(6*Nx + 3, rpoParams%nits))
+     allocate(guessesTmp_(6*Nx + 3, rpoParams%nits + 1))
      
      ! If S=0 then the boundary conditions blow up - fix S at zero and use fixedS mode
      if (fixedS) then
@@ -238,7 +242,7 @@
           rpoParams%ndts = 1000
         end if
         if (initGuess(1)==0.0) then !! Require non-zero period so if fixedS mode need period != 0
-           error stop 
+           error stop 'Need non zero period!'
         end if
      end if
      write(*,*) 'POPI_main: Test'
@@ -253,7 +257,7 @@
 
  !    write(*,*) 'allocated Jac_'
 
-     guesses_ = 0d0
+     guessesTmp_ = 0d0
 
      write(*,*) 'ndts = ', rpoParams%ndts
      !   call writeplotinfo                   ! Writes data to plotinfo.in for plotting later
@@ -279,7 +283,7 @@
      !end if
 
      call storeTrajectory(initGuess, states_)
-     write(*,*) 'Initial gueass trajectory stored.'
+     write(*,*) 'Initial guess trajectory stored.'
 !     info = 0
      if (rpoParams%nits > 0) then
         write(*,*) 'newton_PI: Calling newtonhook'
@@ -289,14 +293,18 @@
         call RPONewtonVecSetup( (/ 3, 1, 2 /), (/ .false., .false., .false. /), info)
         call RPONewtonSetup(rpoParams)
         call RPOSolveNewton(size, initGuess, info)
-    
-        
+
 !        write(*,*) 'NDTS = ', ndts
 !        write(*,*) '   S = ', new_x(1)
         !     guesses_ = guesses
         !     deallocate(guesses)
-        call storeTrajectory(guesses_(:,-1), states_)
+        
+        allocate(guesses_(size, nits+1))
+        guesses_ = guessesTmp_(:,1: nits+1)
+        write(*,*) 'POPI_Main: Final guess  = ', guessesTmp_(:,nits+1)
+        call storeTrajectory(guesses_(:,nits+1), states_)
      end if
+     deallocate(guessesTmp_)
 
 !      if (fixedS) then
 !         rpoParams%SGuess = SGuess !Unchanged
@@ -356,9 +364,14 @@
        type(PIRun) :: run0
        integer :: j
        allocate(timestepPI(n))
-       allocate(states(n,2))
+       allocate(states(n-3,2))
        timestepPI = 0d0
+
+       WRITE(*,*) 'TimestepPI: n    =', n
        WRITE(*,*) 'TimestepPI: ndts =', ndts
+       WRITE(*,*) 'TimestepPI: dt   =', dt
+       WRITE(*,*) 'TimestepPI: in   =', in_
+       
        if (ndts == 1) then
           duration = dt
        else if (ndts == 0) then
@@ -386,8 +399,9 @@
        end if
        run0%init = in_(4:)
        call PI_main(run0, states)
+!       WRITE(*,*)  'TimestepPI: Returned'
        timestepPI = 0d0
-       timestepPI(4:) = states(:,-1)
+       timestepPI(4:) = states(:,2)
        
      end function timestepPI
 
@@ -407,10 +421,12 @@
        !Called once per newton iteration
        use newton, only: new_x, new_nits
        implicit none
-       
-       if (saveGuess) then
-          guesses_(:, new_nits) = new_x(:)
+       if (saveGuessFlag) then
+         guessesTmp_(:, new_nits + 1) = new_x(:)
        end if
+       write(*,*) 'shape(new_x) = ', shape(new_x)
+       write(*,*) 'shape(new_x) = ', shape(guessesTmp_)
+       nits = new_nits
      end subroutine saveGuessPI
 
 

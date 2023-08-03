@@ -1,0 +1,16 @@
+&POPIPARAMS
+ L               = 5.0,
+ Nx              = 40,
+ spf             = 1,
+ n_int           = 1,
+ info            = 0,
+ fixedS          = T,
+ S               = 1.0,  
+ dt              = 5e-3,
+ ndts            = -1,
+ guessInfoFile   = 'guess.in',
+ overwriteParams = T,
+ transGuess      = 0,
+ phaseGuess      = 0,
+ periodGuess     = -1
+/

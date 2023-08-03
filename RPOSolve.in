@@ -1,0 +1,14 @@
+&RPONEWTONPARAMS
+ MGMRES   = 100,
+ NITS     = 100,
+ REL_ERR  = 1e-5,
+ DEL      = 1E0,
+ MNDL     = 1e-15,
+ MXDL	  = 1e15,
+ GTOL     = 1e-3,
+ EPSJ     = 1e-3,
+ INFO     = 0,
+ NDTS     = -1,
+ DT       = -1,
+ SHORTDT  = 1e-5
+/

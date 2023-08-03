@@ -1,0 +1,5 @@
+&GUESSINFO
+ GUESSMODE = 1,
+ LINEN     = 1,
+ GUESSFILE = 'guess.dat'
+/
