@@ -1,4 +1,11 @@
 &POPISETUP
  RPOFILE   = 'RPOSolve.in'
  POPIFILE  = 'POPI.in'
+ OUTDIR    = 'POPIOut/'
+ STATESFILE= 'states.out'
+ GUESSFILE = 'guess.out'
+ JFILE     = 'matrix.out'
+ EVALFILE  = 'evals.out'
+ EVECFILE  = 'evecs.out'
+ TFILE     = 'time.out'
 /

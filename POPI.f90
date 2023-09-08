@@ -42,7 +42,7 @@
  module POPI
    use parameters
    use PIRunModule
-
+   use RPOSolve
    integer :: Nx
    real(dp) :: dx, L
    integer :: n_int
@@ -97,13 +97,14 @@
      logical          :: fixedS=.false.    ! If false, first element of init solves for S
      real(dp)         :: dt = -1d0
      integer          :: ndts = -1
-     logical          :: overwriteParams = .false. ! Will only overwite params in guess if true
+     logical          :: overwriteParams = .false., overwriteS = .false. ! Will only overwite params in guess if true
      real(dp)         :: transGuess=0d0, phaseGuess=0d0, periodGuess =-1d0 ! Only changes params if overwrite is true
      real(dp)         :: S = 1d0           ! Only required if fixedS is true - otherwise uses first element in init
      real(dp), dimension(:), allocatable :: vec
           
      namelist /POPIParams/ L, Nx, spf, n_int, info, fixedS, S, dt, ndts, &
-          guessInfoFile, overwriteParams, transGuess, PhaseGuess, periodGuess
+          guessInfoFile, overwriteParams, transGuess, PhaseGuess, periodGuess, &
+          overwriteS
 
      write(*,*) 'POPI: Reading '
      
@@ -126,22 +127,30 @@
      vec = 0d0
      POPIRunOut%initGuess = 0d0
      call getGuess(6*Nx+3, guessInfoFile, vec)
+     !vec(4:Nx+3) = 0d0
      POPIRunOut%initGuess(:)   = vec
-     if (overwriteParams) then
-        POPIRunOut%initGuess(2) = transGuess
-        POPIRunOut%initGuess(3) = PhaseGuess
-        if (fixedS) then
+     
+     ! If in fixedS mode, parameter 1 contains period, otherwise it is shear
+     if (fixedS) then
+        if (overwriteParams .or. POPIRunOut%initGuess(1)==0d0) then 
            if (periodGuess <0) then
               POPIRunOut%initGuess(1) = 2d0 * pi * n_int / (L*S)
            else
               POPIRunOut%initGuess(1) = periodGuess
-           end if
-        else
+           end if          
+        end if
+     else
+        if (overwriteS) then
            POPIRunOut%initGuess(1) = S
         end if
      end if
 
-!     write(*,*) 'file2popirun : ', POPIRunOut%initGuess
+
+     if (overwriteParams) then
+        POPIRunOut%initGuess(2) = transGuess
+        POPIRunOut%initGuess(3) = PhaseGuess
+     end if
+        
    end subroutine file2POPIRun
 
    subroutine POPIRun2file(POPIRunOut, fileName, initInfoFileIn)
@@ -193,7 +202,7 @@
      close(12)
    end subroutine POPIRun2file
 
-   subroutine POPI_main(rpoParams, POPIParams, states_, guesses_, infoOut)
+   subroutine POPI_main(rpoParams, POPIParams, states_, guesses_, infoOut, J, evals, evecs)
      !*************************************************************************
      use RPOSolve, only : RPONewtonSetTimestep, RPONewtonSetDotprod, RPONewtonSetSaveGuess, stepOrbit, RPONewtonVecSetup, RPONewtonParams, RPONewtonSetup, RPOSolveNewton, dotprod
      implicit none
@@ -207,10 +216,19 @@
      real(dp), dimension(1:,1:) :: states_
      real(dp), dimension(:,:), allocatable :: guessesTmp_
      real(dp), dimension(:,:), allocatable :: guesses_
+     real(dp), dimension(:,:), optional :: J
+     complex(dp), dimension(:), optional :: eVals
+     complex(dp), dimension(:,:), optional :: eVecs
+
+     complex(dp), dimension(:), allocatable :: eVals_
+     complex(dp), dimension(:,:), allocatable :: eVecs_
+
 !     real(dp), dimension(:,:), allocatable, intent(out), optional :: Jac_
      integer, optional :: infoOut
-     logical :: jacOut = .false.
-     integer :: info, size
+     logical :: jacOut = .false., evalOut = .false.
+     integer :: info, size, nframes
+
+     integer, dimension(2) :: shp = (/0, 0/)
      logical :: saveGuessFlag = .true.
      integer :: nits = 0
      double complex, dimension(:), allocatable :: final_f
@@ -229,7 +247,7 @@
      initGuess   = POPIParams%initGuess
      n_int       = POPIParams%n_int
      fixedS      = POPIParams%fixedS
-     write(*,*) 'POPI_main: Test'
+
 
      allocate(guessesTmp_(6*Nx + 3, rpoParams%nits + 1))
      
@@ -245,8 +263,24 @@
            error stop 'Need non zero period!'
         end if
      end if
-     write(*,*) 'POPI_main: Test'
+
      size  = 6 * Nx + 3
+
+     if (present(J)) then
+        JacOut = .true.
+     end  if
+
+     if(present(evals) .or. present(evecs)) then
+        evalOut = .true.
+        allocate(evals_(size - 3))
+        allocate(evecs_(size - 3, size - 3))
+     end if
+
+
+     write(*,*) 'evals_', shape(evals_)
+     write(*,*) 'evecs_', shape(evecs_)
+     evals_=0d0
+     evecs_=0d0
 
  !    if (present(Jac_)) then
  !       JacOut = .true.
@@ -258,8 +292,9 @@
  !    write(*,*) 'allocated Jac_'
 
      guessesTmp_ = 0d0
+     shp = shape(states_)
+     nframes = shp(2) - 2
 
-     write(*,*) 'ndts = ', rpoParams%ndts
      !   call writeplotinfo                   ! Writes data to plotinfo.in for plotting later
 
 !*****
@@ -271,18 +306,23 @@
      
      !call store_traj(n_int*2*pi*L_inv/S, ndts) ! Stores the initial guess' trajectory in out.dat - if an error occurs or the code is exited early this can be helpful
      
-     !if (new_x(2) == 0) then
-     !   write(*,*) 'POPI_Main: Calling getlshift'
-     !   call getlshift
-        !call store_traj(n_int*2*pi*L_inv/S, ndts)
-     !end if
-     
-     !if (new_x(3) == 0) then
-     !   write(*,*) 'POPI_Main: Calling getphase'
-     !   call getphase
-     !end if
-
      call storeTrajectory(initGuess, states_)
+
+     if (initGuess(2) == 0) then
+        write(*,*) 'POPI_Main: Calling getlshift'
+        initGuess(2) = -bestshift(states_(:,1), states_(:,nframes+2), Nx)*L/Nx
+        write(*,*) 'bestshift = ', initGuess(2)
+        call storeTrajectory(initGuess, states_)
+     end if
+     
+    if (initGuess(3) == 0) then
+       write(*,*) 'POPI_Main: Calling getphase'
+       initGuess(3) = bestphase(states_(:,1), states_(:,nframes+2), Nx)
+       write(*,*) 'bestshift = ', initGuess(3)
+       call storeTrajectory(initGuess, states_)
+    end if
+
+
      write(*,*) 'Initial guess trajectory stored.'
 !     info = 0
      if (rpoParams%nits > 0) then
@@ -301,7 +341,7 @@
         
         allocate(guesses_(size, nits+1))
         guesses_ = guessesTmp_(:,1: nits+1)
-        write(*,*) 'POPI_Main: Final guess  = ', guessesTmp_(:,nits+1)
+!        write(*,*) 'POPI_Main: Final guess  = ', guessesTmp_(:,nits+1)
         call storeTrajectory(guesses_(:,nits+1), states_)
      end if
      deallocate(guessesTmp_)
@@ -328,13 +368,24 @@
 !         infoOut = info
 !      end if
 
-!     ! if (JacOut) then
-!     !    write(*,*) 'Getting full matrix'
-!     !    call GetMatrix(n,3,multJ,J)
-!     !    Jac_ = J
-!     !    deallocate(J)
-!     ! end if
-
+     if (JacOut .or. evalOut) then
+        write(*,*) 'Getting full matrix'
+        call RPOGetMatrix(size,3,J)
+        write(*,*) 'Full matrix found'
+        if (evalOut) then
+           write(*,*) 'Getting Eigenvalues'
+           call RPOGetEigenvalues(size - 3, J, eVals_, eVecs_)
+           write(*,*) 'Getting Eigenvalues'
+        end if
+     end if
+     
+     if (present(eVals)) then
+        eVals = eVals_
+     end if
+     if (present(eVecs)) then
+        eVecs = eVecs_
+     end if
+     
 !      if (present(fluxs)) then
 !         call GetStats(states_, amps, fluxs, avgAmps, avgFluxs, pkAmps, pkFluxs)
 !      end if
@@ -367,23 +418,28 @@
        allocate(states(n-3,2))
        timestepPI = 0d0
 
-       WRITE(*,*) 'TimestepPI: n    =', n
-       WRITE(*,*) 'TimestepPI: ndts =', ndts
-       WRITE(*,*) 'TimestepPI: dt   =', dt
-       WRITE(*,*) 'TimestepPI: in   =', in_
        
        if (ndts == 1) then
           duration = dt
+          ndts_ = 1
        else if (ndts == 0) then
           duration = 0d0
           ndts_ = 1
        else if (fixedS) then
           duration = in_(1)
+          ndts_ = ndts
        else
-          duration = 2d0*pi*n_int/(in_(1)*POPIParams%L*dble(ndts))
+          duration = 2d0*pi*n_int/(in_(1)*POPIParams%L)
+          ndts_ = ndts
        end if
        
        dt_ = duration/ndts_
+
+      ! WRITE(*,*) 'TimestepPI: n    =', n
+      ! WRITE(*,*) 'TimestepPI: ndts =', ndts
+      ! WRITE(*,*) 'TimestepPI: dt   =', dt_
+      ! WRITE(*,*) 'TimestepPI: in   =', in_
+      ! WRITE(*,*) 'TimestepPI: Duration = ', duration
 
        run0%shift = in_(2)
        run0%phase = in_(3)
@@ -474,6 +530,22 @@
 
        write(*,*) 'storeTraj complete'
      end subroutine storeTrajectory
+
+     ! function getLShift(x)
+     !   implicit none
+     !   real(dp), intent(out) :: getlshift
+     !   real(dp), dimension(n) :: y_
+     !   y_(:) = 0d0
+     !   call steporbit(n, ndts, 0d0, 0d0, PIParams, new_x, y_)
+     !   new_x(2) = -bestshift(new_x(4:), y_(4:))*PIParams%L/N_x
+     ! end subroutine getLShift
+     
+     ! subroutine getphase
+     !   implicit none
+     !   real(dp), dimension(n) :: y_
+     !   call steporbit(n, ndts, new_x(2), 0d0, PIParams, new_x, y_)
+     !   new_x(3) = bestphase(new_x(4:), y_(4:))
+     ! end subroutine getphase
    !*************************************************************************
    end subroutine POPI_main
    !*************************************************************************
@@ -481,80 +553,69 @@
 !-------------------------------------------------------------------------
 !  determine best guess for Lshift
 !-------------------------------------------------------------------------
-!    subroutine getLShift
-!      implicit none
-!      real(dp), dimension(n) :: y_
-!      y_(:) = 0d0
-!      call steporbit(n, ndts, 0d0, 0d0, PIParams, new_x, y_)
-!      new_x(2) = -bestshift(new_x(4:), y_(4:))*PIParams%L/N_x
-!    end subroutine getLShift
 
-!    subroutine getphase
-!      implicit none
-!      real(dp), dimension(n) :: y_
-!      call steporbit(n, ndts, new_x(2), 0d0, PIParams, new_x, y_)
-!      new_x(3) = bestphase(new_x(4:), y_(4:))
-!    end subroutine getphase
 
-!    function bestShift(stateStart, stateEnd)
-!      real(dp), dimension(1:), intent(in) :: stateStart, stateEnd
-!      integer:: bestShift
-!      complex(dp), dimension(N_x) :: nstart, phistart, nend, phiend
-!      complex(dp), dimension(N_x) :: fluxStart, fluxEnd
-!      double precision :: prod(N_x)
-!      integer :: i1, i2
-!      real(dp) :: s
-!      do i1 = 1, N_x
-!         phistart(i1) = stateStart(2*i1 + 2*N_x - 1) + im * stateStart(2*i1 + 2*N_x)
-!         nstart(i1)   = stateStart(2*i1 + 4*N_x - 1) + im * stateStart(2*i1 + 4*N_x)
-!         phiend(i1)   =   stateEnd(2*i1 + 2*N_x - 1) + im *   stateEnd(2*i1 + 2*N_x)
-!         nend(i1)     =   stateEnd(2*i1 + 4*N_x - 1) + im *   stateEnd(2*i1 + 4*N_x)
-!      end do
+   function bestShift(stateStart, stateEnd, N_x)
+     real(dp), dimension(1:), intent(in) :: stateStart, stateEnd
+     integer :: N_x
+     integer:: bestShift
+     complex(dp), dimension(N_x) :: nstart, phistart, nend, phiend
+     complex(dp), dimension(N_x) :: fluxStart, fluxEnd
+     double precision :: prod(N_x)
+     integer :: i1, i2
+     real(dp) :: s
+     do i1 = 1, N_x
+        phistart(i1) = stateStart(2*i1 + 2*N_x - 1) + im * stateStart(2*i1 + 2*N_x)
+        nstart(i1)   = stateStart(2*i1 + 4*N_x - 1) + im * stateStart(2*i1 + 4*N_x)
+        phiend(i1)   =   stateEnd(2*i1 + 2*N_x - 1) + im *   stateEnd(2*i1 + 2*N_x)
+        nend(i1)     =   stateEnd(2*i1 + 4*N_x - 1) + im *   stateEnd(2*i1 + 4*N_x)
+     end do
      
-!      fluxStart(:) = abs(phiStart(:)*conjg(nStart(:)) - nstart(:)*conjg(phiStart(:)))
-!      fluxEnd(:)   = abs(  phiEnd(:)*conjg(  nEnd(:)) -   nEnd(:)*conjg(  phiEnd(:)))
-!      prod(:) = 0.0
-!      do i1 = 1, N_x
-!         do i2 = 1, N_x
-!            s = (fluxStart(modulo(i2+i1-2, N_x)+1) - fluxEnd(i2))
-!            prod(i1) = prod(i1) + s * s
-!         end do
-!      end do
-!      bestshift = minloc(prod(:), dim = 1)
-!      bestshift = modulo((bestshift - 1 + N_x/2), N_x) - N_x/2
-!    end function bestShift
+     fluxStart(:) = abs(phiStart(:)*conjg(nStart(:)) - nstart(:)*conjg(phiStart(:)))
+     fluxEnd(:)   = abs(  phiEnd(:)*conjg(  nEnd(:)) -   nEnd(:)*conjg(  phiEnd(:)))
+     prod(:) = 0.0
+     do i1 = 1, N_x
+        do i2 = 1, N_x
+           s = (fluxStart(modulo(i2+i1-2, N_x)+1) - fluxEnd(i2))
+           prod(i1) = prod(i1) + s * s
+        end do
+     end do
+     bestshift = minloc(prod(:), dim = 1)
+     bestshift = modulo((bestshift - 1 + N_x/2), N_x) - N_x/2
+!     bestshift = bestshift-1
+   end function bestShift
    
-!    function bestPhase(stateStart, stateEnd)
-!      use parameters
-!      real(dp), dimension(1:), intent(in) :: stateStart, stateEnd
-!      real(dp) :: bestPhase
-!      complex(dp), dimension(N_x) :: nstart, phistart, nend, phiend
-!      complex(dp), dimension(N_x) :: fluxStart, fluxEnd
-!      double complex :: s
-!      double precision :: prod(628)
-!      integer :: i1, i2
+   function bestPhase(stateStart, stateEnd, N_x)
+     use parameters
+     real(dp), dimension(1:), intent(in) :: stateStart, stateEnd
+     real(dp) :: bestPhase
+     integer :: N_x
+     complex(dp), dimension(N_x) :: nstart, phistart, nend, phiend
+     complex(dp), dimension(N_x) :: fluxStart, fluxEnd
+     double complex :: s
+     double precision :: prod(6283)
+     integer :: i1, i2
      
-!      do i1 = 1, N_x
-!         phistart(i1) = stateStart(2*i1 + 2*N_x - 1) + im * stateStart(2*i1 + 2*N_x)
-!         nstart(i1)   = stateStart(2*i1 + 4*N_x - 1) + im * stateStart(2*i1 + 4*N_x)
-!         phiend(i1)   =   stateEnd(2*i1 + 2*N_x - 1) + im *   stateEnd(2*i1 + 2*N_x)
-!         nend(i1)     =   stateEnd(2*i1 + 4*N_x - 1) + im *   stateEnd(2*i1 + 4*N_x)
-!      end do
+     do i1 = 1, N_x
+        phistart(i1) = stateStart(2*i1 + 2*N_x - 1) + im * stateStart(2*i1 + 2*N_x)
+        nstart(i1)   = stateStart(2*i1 + 4*N_x - 1) + im * stateStart(2*i1 + 4*N_x)
+        phiend(i1)   =   stateEnd(2*i1 + 2*N_x - 1) + im *   stateEnd(2*i1 + 2*N_x)
+        nend(i1)     =   stateEnd(2*i1 + 4*N_x - 1) + im *   stateEnd(2*i1 + 4*N_x)
+     end do
 
-!      prod(:) = 0d0
-!      do i1 = 1, 628
-!         do i2 = 1, N_x
-!            s = -phiStart(i2) + phiEnd(i2)*exp(im*(i1-1)*0.01)
-!            prod(i1) = prod(i1) + dble(s*conjg(s))
-!            s = -nStart(i2) + nEnd(i2)*exp(im*(i1-1)*0.01)
-!            prod(i1) = prod(i1) + dble(s*conjg(s))
-!         end do
-!      end do
-! !     write(*,*) 'bestshift: prod =  ', prod
+     prod(:) = 0d0
+     do i1 = 1, 6283
+        do i2 = 1, N_x
+           s = -phiStart(i2) + phiEnd(i2)*exp(im*(i1-1)*0.001d0)
+           prod(i1) = prod(i1) + dble(s*conjg(s))
+           s = -nStart(i2) + nEnd(i2)*exp(im*(i1-1)*0.001d0)
+           prod(i1) = prod(i1) + dble(s*conjg(s))
+        end do
+     end do
+!     write(*,*) 'bestshift: prod =  ', prod
 
-!      bestPhase = (minloc(prod(:), dim = 1) - 1) * 0.01
-
-!    end function bestPhase
+     bestPhase = (minloc(prod(:), dim = 1) - 1) * 0.001d0
+    end function bestPhase
 
 
 
@@ -631,58 +692,3 @@
    ! end subroutine POPIRun2file
 
  end module POPI
-
-program main
-  use POPI, only : file2POPIRun, POPIRun, POPI_main
-  use RPOSolve, only : RPONewtonParams, file2RPORun
-  use parameters
-
-  implicit none
-
-  type(RPONewtonParams) :: rpoParams
-  type(POPIRun)         :: POPIParams
-  real(dp), dimension(:,:), allocatable :: states, guesses, fluxs, amps, avgFluxs, avgAmps, pkFluxs, pkAmps
-  character(len = 400) :: SetupFile = 'POPISetup.in', rpoFile, POPIFile
-  integer :: info
-  integer :: nframes
-  namelist /POPISetup/ rpoFile, POPIFile
-
-  ! Setup file contains names of files containing PI model params and RPO solver params
-  write(*,*) 'Reading setup file'
-  open(21, file = SetupFile)
-  read(21, nml = POPISetup)
-  close(21)
-
-
-  write(*,*) 'Setup read done'
-  write(*,*) rpoFile
-  write(*,*) POPIFile
-
-  ! Convert POPIFile into POPIRun type (contains all info about PI specific implementation)
-  call file2POPIRun(POPIFile,POPIParams)
-  call file2RPORun(RPOFile, RPOParams)
-
-
-  ! **************************************************************************************!
-  !                    MOVE INTO POPI MAIN?                                               !
-  if (POPIParams%ndts > 0) then    ! Overwrite RPO ndts if needed
-     RPOParams%ndts = POPIParams%ndts
-  else if (POPIParams%dt > 0) then
-     RPOParams%ndts = floor(POPIParams%n_int *2d0 * pi/(POPIParams%L * POPIParams%S * POPIParams%dt))  ! Determine ndts from target dt (approx)
-     POPIParams%ndts = floor(POPIParams%n_int *2d0 * pi/(POPIParams%L * POPIParams%S * POPIParams%dt))  ! Determine ndts from target dt (approx)
-  else
-     ! Stick with using ndts from RPO file (this defaults to 1000 in RPOSolver if ndts < 0)
-  end if
-  ! *************************************************************************************!
-
-  write(*,*) 'POPI: Nx = ', POPIParams%Nx
-  write(*,*) 'POPI: spf = ', POPIParams%spf
-  nframes = int(POPIParams%ndts/POPIParams%spf)
-  allocate(states(6*POPIParams%Nx, nframes + 2))
-
-  ! Convert POPIFile into POPIRun type (contains all info about PI specific implementation)
-!  call file2POPIRun(POPIFile,POPIParams)
-  write(*,*) RPOParams
-  call POPI_main(rpoParams, POPIParams, states, guesses, info)
-
-end program main

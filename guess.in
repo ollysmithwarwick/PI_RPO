@@ -1,5 +1,5 @@
 &GUESSINFO
  GUESSMODE = 1,
  LINEN     = 1,
- GUESSFILE = 'guess.dat'
+ GUESSFILE = '../../Model/POPI/Finals/5_0/HiRes/RPO50_0/L00050_000S01_500P78/states.dat'
 /
